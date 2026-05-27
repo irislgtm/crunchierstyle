@@ -1,10 +1,5 @@
 #version 120
 
-// PSX Affine Texture Sampling — Entity Variant
-// Drop-in replacement for SEUS PBR gbuffers_entities.fsh.
-// Same affine UV blend as terrain, applied to entity textures.
-// Does not modify normals, material data, or depth.
-
 uniform sampler2D texture;
 
 uniform float u_affineStrength;

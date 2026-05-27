@@ -1,11 +1,5 @@
 #version 120
 
-// PSX Affine Texture Sampling
-// Drop-in replacement for SEUS PBR gbuffers_terrain.fsh.
-// Blends perspective-correct and affine UVs for terrain.
-// Outputs standard SEUS PBR gbuffer data — only the sampled
-// albedo colour is affected; normals and material data pass through.
-
 uniform sampler2D texture;
 
 uniform float u_affineStrength;

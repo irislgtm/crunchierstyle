@@ -1,10 +1,5 @@
 #version 120
 
-// PSX Vertex Snap + Affine UV Warp — Entity Variant
-// Drop-in replacement for SEUS PBR gbuffers_entities.vsh.
-// Same vertex snapping and affine UV prep as terrain variant,
-// applied to mobs, items, armour stands, etc.
-
 uniform float u_snapResolution;
 uniform bool   u_snapEnabled;
 uniform bool   u_affineEnabled;

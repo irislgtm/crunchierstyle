@@ -1,10 +1,5 @@
 #version 120
 
-// PSX Post-Processing Composite
-// Operates on SEUS PBR's fully-lit HDR scene (colortex0).
-// Applies: 4x4 Bayer ordered dither → 5-5-5 RGB quantization → linear fog.
-// No tonemapping or gamma — SEUS final pass handles that.
-
 uniform sampler2D colortex0;
 uniform sampler2D depthtex0;
 
@@ -22,7 +17,6 @@ uniform bool  u_fogEnabled;
 
 varying vec2 texCoord;
 
-// 4x4 Bayer matrix values in row-major order
 const float bayer4[16] = float[16](
      0.0/16.0,  8.0/16.0,  2.0/16.0, 10.0/16.0,
     12.0/16.0,  4.0/16.0, 14.0/16.0,  6.0/16.0,
@@ -45,16 +39,13 @@ void main() {
     vec3 color = texture2D(colortex0, texCoord).rgb;
     float depth = texture2D(depthtex0, texCoord).r;
 
-    // Bayer ordered dither (applied BEFORE quantization)
     if (u_ditherEnabled && u_ditherStrength > 0.0) {
         float threshold = (GetBayer4(gl_FragCoord.xy) - 0.5) * u_ditherStrength;
         color += threshold;
     }
 
-    // 5-5-5 RGB quantization (15-bit colour, PSX style)
     color = floor(color * 31.0 + 0.5) / 31.0;
 
-    // Linear-space distance fog (before tonemapping, in HDR)
     if (u_fogEnabled) {
         float linDepth = GetLinearDepth(depth);
 

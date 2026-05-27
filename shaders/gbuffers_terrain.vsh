@@ -1,10 +1,5 @@
 #version 120
 
-// PSX Vertex Snap + Affine UV Warp
-// Drop-in replacement for SEUS PBR gbuffers_terrain.vsh.
-// Snaps gl_Position.xy to a clip-space grid and pre-multiplies
-// UVs by w for perspective-incorrect (affine) sampling.
-
 uniform float u_snapResolution;
 uniform bool   u_snapEnabled;
 uniform bool   u_affineEnabled;
