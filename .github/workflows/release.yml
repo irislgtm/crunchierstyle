@@ -1,0 +1,235 @@
+name: Build & Release Shaderpack
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.0.0)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  # ── Metadata ──────────────────────────────────────────────────────────
+  SHADERPACK_NAME: CrunchierStyle
+  # Version source priority: tag > workflow input > auto-increment
+  # ── Validation ────────────────────────────────────────────────────────
+  REQUIRED_SHADER_FILES: >-
+    shaders/shaders.properties
+  REQUIRED_SHADER_DIRS: >-
+    shaders/
+  # ── Packaging ─────────────────────────────────────────────────────────
+  # Files/dirs at repo root to include beside shaders/
+  # (README, LICENSE, preview images, etc.)
+  EXTRA_INCLUDES: >-
+    README.md
+    LICENSE
+    LICENSE.txt
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  #  VALIDATE  — check structure before anything else
+  # ─────────────────────────────────────────────────────────────────────
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      ref_name: ${{ steps.version.outputs.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required directories
+        run: |
+          for dir in $REQUIRED_SHADER_DIRS; do
+            if [ ! -d "$dir" ]; then
+              echo "::error::Missing required directory: $dir"
+              exit 1
+            fi
+          done
+          echo "All required directories present."
+
+      - name: Check required files
+        run: |
+          for f in $REQUIRED_SHADER_FILES; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Missing required file: $f"
+              exit 1
+            fi
+          done
+          echo "All required files present."
+
+      - name: Check shader files have proper version header
+        run: |
+          broken=0
+          while IFS= read -r -d '' sf; do
+            first=$(head -1 "$sf" | tr -d '[:space:]')
+            case "$first" in
+              *"#version"*) ;;
+              *) echo "::warning::$sf missing #version directive";;
+            esac
+          done < <(find shaders/ \( -name '*.vsh' -o -name '*.fsh' -o -name '*.glsl' \) -print0)
+          echo "Shader header check complete ($broken warnings)."
+
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/v}"
+            REF="tag"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            VER="${{ inputs.version }}"
+            REF="input"
+          else
+            VER="$(date +%Y%m%d)-dev"
+            REF="dev"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "ref_name=$REF" >> "$GITHUB_OUTPUT"
+
+  # ─────────────────────────────────────────────────────────────────────
+  #  PACKAGE  — build the shaderpack zip
+  # ─────────────────────────────────────────────────────────────────────
+  package:
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.zip.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare staging
+        run: |
+          mkdir -p staging
+          cp -r shaders staging/shaders
+
+      - name: Copy extra metadata files
+        run: |
+          for f in $EXTRA_INCLUDES; do
+            if [ -f "$f" ]; then
+              cp "$f" staging/
+              echo "  + $f"
+            fi
+          done
+
+      - name: Generate optional metadata (pack.json)
+        run: |
+          if [ ! -f staging/shaders/pack.json ]; then
+            cat > staging/shaders/pack.json <<-EOF
+          {
+            "shaderDescription": "$SHADERPACK_NAME v${{ needs.validate.outputs.version }}"
+          }
+          EOF
+            echo "  + generated pack.json"
+          fi
+
+      - name: Stamp build info
+        run: |
+          echo -e "\n# Built by CI — ${{ env.SHADERPACK_NAME }} v${{ needs.validate.outputs.version }}" \
+            >> staging/shaders/shaders.properties
+
+      - name: Create zip
+        id: zip
+        run: |
+          cd staging
+          ARTIFACT="$SHADERPACK_NAME-${{ needs.validate.outputs.version }}.zip"
+          zip -r "../$ARTIFACT" . -x "*.git*" ".*"
+          cd ..
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+          echo "Built: $ARTIFACT ($(du -h "$ARTIFACT" | cut -f1))"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SHADERPACK_NAME }}-${{ needs.validate.outputs.version }}
+          path: ${{ steps.zip.outputs.artifact }}
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────
+  #  RELEASE  — create GitHub Release and attach the zip
+  # ─────────────────────────────────────────────────────────────────────
+  release:
+    if: |
+      (needs.validate.outputs.ref_name == 'tag') ||
+      (github.event_name == 'workflow_dispatch')
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SHADERPACK_NAME }}-${{ needs.validate.outputs.version }}
+          path: dist/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VER="${{ needs.validate.outputs.version }}"
+          NAME="${{ env.SHADERPACK_NAME }}"
+
+          LAST_TAG="$(git tag --sort=-v:refname | head -1 || true)"
+          if [ -n "$LAST_TAG" ] && [ "$LAST_TAG" != "v$VER" ]; then
+            LOG=$(git log "$LAST_TAG"..HEAD --oneline --no-decorate 2>/dev/null || true)
+          else
+            LOG=$(git log --oneline -20 --no-decorate 2>/dev/null || echo "Initial release")
+          fi
+
+          {
+            echo "body<<EOF"
+            echo "## $NAME v$VER"
+            echo ""
+            echo "### Changes"
+            echo '```'
+            echo "$LOG"
+            echo '```'
+            echo ""
+            echo "### Installation"
+            echo "1. Download the \`.zip\` from Assets below"
+            echo "2. Place it in \`.minecraft/shaderpacks/\`"
+            echo "3. Select it in Video Settings → Shaders"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.validate.outputs.version }}
+          name: ${{ env.SHADERPACK_NAME }} v${{ needs.validate.outputs.version }}
+          body: ${{ steps.notes.outputs.body }}
+          files: dist/*
+          draft: false
+          prerelease: ${{ contains(needs.validate.outputs.version, '-') && !contains(needs.validate.outputs.version, 'dev') }}
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────────
+  #  SUMMARY
+  # ─────────────────────────────────────────────────────────────────────
+  summary:
+    if: always()
+    needs: [validate, package, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print summary
+        run: |
+          echo "## Shaderpack CI Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Job | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Validate | ${{ needs.validate.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Package  | ${{ needs.package.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Release  | ${{ needs.release.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Artifact:** ${{ env.SHADERPACK_NAME }}-${{ needs.validate.outputs.version }}.zip" >> "$GITHUB_STEP_SUMMARY"
